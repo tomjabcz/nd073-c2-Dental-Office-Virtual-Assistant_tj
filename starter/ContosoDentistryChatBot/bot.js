@@ -2,57 +2,93 @@
 // Licensed under the MIT License.
 
 const { ActivityHandler, MessageFactory } = require('botbuilder');
-
-const { QnAMaker } = require('botbuilder-ai');
 const DentistScheduler = require('./dentistscheduler');
-const IntentRecognizer = require("./intentrecognizer")
+const IntentRecognizer = require('./intentrecognizer');
+const axios = require('axios');
+
+// Funkce pro dotazování Language Studio (Question Answering)
+async function queryLanguageStudio(question) {
+    try {
+        const response = await axios.post(
+            `${process.env.LANGUAGE_QNA_ENDPOINT}/language/:query-knowledgebases?projectName=${process.env.LANGUAGE_QNA_PROJECT}&deploymentName=${process.env.LANGUAGE_QNA_DEPLOYMENT}&api-version=2021-10-01`,
+            {
+                question: question,
+                top: 3,
+                includeUnstructuredSources: true,
+            },
+            {
+                headers: {
+                    'Ocp-Apim-Subscription-Key': process.env.LANGUAGE_QNA_KEY,
+                    'Content-Type': 'application/json',
+                },
+            }
+        );
+        return response.data.answers;
+    } catch (error) {
+        console.error("Chyba při dotazu na Language Studio:", error.message);
+        return [];
+    }
+}
 
 class DentaBot extends ActivityHandler {
-    constructor(configuration, qnaOptions) {
-        // call the parent constructor
+    constructor(configuration) {
         super();
-        if (!configuration) throw new Error('[QnaMakerBot]: Missing parameter. configuration is required');
 
-        // create a QnAMaker connector
-        this.QnAMaker = new QnAMaker()
-       
-        // create a DentistScheduler connector
-      
-        // create a IntentRecognizer connector
+        if (!configuration) throw new Error('[DentaBot]: Missing parameter: configuration is required');
 
+        this.recognizer = new IntentRecognizer(
+            configuration.LUIS_APP_ID,
+            configuration.LUIS_API_KEY,
+            configuration.LUIS_API_HOST_NAME
+        );
+
+        this.scheduler = new DentistScheduler(configuration.SCHEDULER_API_URL);
 
         this.onMessage(async (context, next) => {
-            // send user input to QnA Maker and collect the response in a variable
-            // don't forget to use the 'await' keyword
-          
-            // send user input to IntentRecognizer and collect the response in a variable
-            // don't forget 'await'
-                     
-            // determine which service to respond with based on the results from LUIS //
+            const userInput = context.activity.text;
 
-            // if(top intent is intentA and confidence greater than 50){
-            //  doSomething();
-            //  await context.sendActivity();
-            //  await next();
-            //  return;
-            // }
-            // else {...}
-             
+            const luisResult = await this.recognizer.recognize(context);
+            const topIntent = luisResult.intent;
+            const topScore = luisResult.score;
+
+            if (topIntent === 'ScheduleAppointment' && topScore > 0.5) {
+                const result = await this.scheduler.scheduleAppointment(context);
+                await context.sendActivity(result);
+                await next();
+                return;
+            }
+
+            if (topIntent === 'GetAvailability' && topScore > 0.5) {
+                const result = await this.scheduler.getAvailability();
+                await context.sendActivity(result);
+                await next();
+                return;
+            }
+
+            const answers = await queryLanguageStudio(userInput);
+
+            if (answers.length > 0 && answers[0].confidenceScore > 0.5) {
+                await context.sendActivity(answers[0].answer);
+            } else {
+                await context.sendActivity("Omlouvám se, nerozumím dotazu. Můžete to prosím říct jinak?");
+            }
+
             await next();
-    });
+        });
 
         this.onMembersAdded(async (context, next) => {
-        const membersAdded = context.activity.membersAdded;
-        //write a custom greeting
-        const welcomeText = '';
-        for (let cnt = 0; cnt < membersAdded.length; ++cnt) {
-            if (membersAdded[cnt].id !== context.activity.recipient.id) {
-                await context.sendActivity(MessageFactory.text(welcomeText, welcomeText));
+            const membersAdded = context.activity.membersAdded;
+            const welcomeText =
+                'Vítejte! Jsem virtuální asistent zubní ordinace Contoso. Můžete se mě ptát na běžné otázky nebo si domluvit termín.';
+
+            for (let member of membersAdded) {
+                if (member.id !== context.activity.recipient.id) {
+                    await context.sendActivity(MessageFactory.text(welcomeText, welcomeText));
+                }
             }
-        }
-        // by calling next() you ensure that the next BotHandler is run.
-        await next();
-    });
+
+            await next();
+        });
     }
 }
 
