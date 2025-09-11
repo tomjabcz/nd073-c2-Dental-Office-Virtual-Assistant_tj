@@ -58,3 +58,28 @@ server.on('upgrade', (req, socket, head) => {
         await myBot.run(context);
     });
 });
+
+const os = require('os');
+//const express = require('express');
+
+//const app = express();
+
+// GET diagnostický endpoint
+server.get('/debug', async (req, res) => {
+  const interfaces = os.networkInterfaces();
+  const addresses = [];
+
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        addresses.push(iface.address);
+      }
+    }
+  }
+
+  res.json({
+    hostname: os.hostname(),
+    ipAddresses: addresses,
+    nodeVersion: process.version
+  });
+});
